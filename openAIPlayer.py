@@ -2,7 +2,6 @@ import gym
 
 
 env = gym.make('CartPole-v0')
-env.monitor.start('/tmp/cartpole-experiment-1')
 
 for i_episode in range(20):
     observation = env.reset()
@@ -15,4 +14,3 @@ for i_episode in range(20):
             print("Episode frinished after {} timesteps".format(t+1))
             break
 
-env.monitor.close()

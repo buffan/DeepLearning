@@ -1,7 +1,6 @@
 import gym
 import tensorflow as tf
 from collections import deque
-from sys import argv
 from random import random, sample
 
 
@@ -11,7 +10,13 @@ MAX_REPLAYS = 100
 
 
 class network(object):
+    """
+    Represents a neural network
+    """
     def __init__(self, obs_space, act_space, hidden_nodes):
+        """
+        Initializes the network
+        """
         self.obs_space = obs_space
         self.act_space = act_space
         self.replay_memory = deque(maxlen=MAX_REPLAYS)
@@ -27,23 +32,33 @@ class network(object):
         self.biases = self.initialize_biases()
 
         self.x = tf.placeholder(tf.float32, [None, self.input_width])
-        self.y = tf.placeholder(tf.float32, [None, self.output_width])
+        self.y_ = self.y = tf.placeholder(tf.float32, [None, self.output_width])
 
         self.session = tf.InteractiveSession()
         self.session.run(tf.initialize_all_variables())
 
         
     def build_network(self): 
-        hidden1 = tf.nn.relu(tf.matmul(self.x, self.weights['w1']) + self.biases['b1'])
+        """
+        Constructs the network from the initialized dictionaries of weights & biases
+
+        Returns: Final layer of the neural network
+        """
+        hidden1 = tf.nn.sigmoid(tf.matmul(self.x, self.weights['w1']) + self.biases['b1'])
         hidden2 = tf.nn.sigmoid(tf.matmul(hidden1, self.weights['w2']) + self.biases['b2'])
         hidden3 = tf.nn.sigmoid(tf.matmul(hidden2, self.weights['w3']) + self.biases['b3'])
         out = tf.nn.sigmoid(tf.matmul(hidden3, self.weights['out']) + self.biases['out'])
 
         return out
-        
 
 
     def initialize_weights(self):
+        """
+        Initializes weights of the network with normalized random variables.
+        Network contains 3 hidden layers and an output layer
+
+        Returns: dictionary containing initialized weights of all layers
+        """
         return {
             'w1': tf.Variable(tf.random_normal([self.input_width, self.hidden_nodes])),
             'w2': tf.Variable(tf.random_normal([self.hidden_nodes, self.hidden_nodes])),
@@ -51,7 +66,14 @@ class network(object):
             'out': tf.Variable(tf.random_normal([self.hidden_nodes, self.output_width]))
         }
 
+
     def initialize_biases(self):
+        """
+        Initializes biases of the network with normalized random variables.
+        Network contains 3 hidden layers and an output layer
+
+        Returns: dictionary containing initialized biases of all layers
+        """
         return {
             'b1': tf.Variable(tf.random_normal([self.input_width])),
             'b2': tf.Variable(tf.random_normal([self.hidden_nodes])),
@@ -61,34 +83,39 @@ class network(object):
 
         
     def get_action(self, obs):
+        """
+        Returns the action the network should take
+        Inputs: 
+            obs- observation of environment (environment inputs)
+        """
         self.epsilon *= self.epsilon_decay
 
         self.epsilon = max(self.epsilon, MIN_EPSILON)
         action = (self.act_space.sample() if self.epsilon > random()
-            else tf.argmax(self.model.predict(obs.reshape(1, self.input_width))))
+            else tf.argmax(self.session.run(self.y, np.array([obs]))))
 
         return action
 
 
-    def add_mem(self, mem):
+    def add_mem(self, mem, obs, action):
+        """
+        Add a memory to the experience replay
+        Inputs:
+            mem- return of env.step(action)
+            obs- environment observation
+            action- action taken
+        """
         # deque automatically pops if len > MAX_REPLAYS
-        obs, curr_obs, action, reward, done = mem
+        curr_obs, reward, done, _ = mem
         self.replay_memory.append((obs, curr_obs, action, reward, done))
         self.num_steps += 1
 
 
-    def load_weights(self):
-        if os.path.isfile(self.weights_file):
-            self.model.load_weights(self.weights_file)
-
-
-    def save_weights(self):
-        if os.path.isfile(self.weights_file):
-            os.remove(self.weights_file)
-        self.model.save_weights(self.weights_file)
-
-
     def train(self):
+        """
+        Trains the neural network
+        """
+        # This network is a mess and I don't know what's going o
         current_batch_size = min(len(self.replay_memory), BATCH_SIZE)
         sample_batch = sample(self.replay_memory, current_batch_size)
         
@@ -103,26 +130,27 @@ class network(object):
         if done:
             update[action] = reward
         else:
-            update[action] = reward + self.gamme*tf.argmax(self.model.predict(curr_state.reshape(1, self.input_width))[0])
+            available_actions = self.model.predict(curr_state.reshape(1, self.input_width))[0]
+            update[action] = reward + self.gamme*tf.argmax(available_actions)
         
-        x[replay] = prev_state  
+        x[replay] = prev_state
         y[replay] = update
 
-    loss += self.model.train_on_batch(x, y)
-
-
-def average(l):
-    return sum(l)/len(l)
+        loss += self.model.train_on_batch(x, y)
 
 
 if __name__ == '__main__':
-    env_name = argv[1]
-    hidden_nodes = argv[2]
+    env_name = "CartPole-v0"
+    hidden_nodes = 200
     env = gym.make(env_name)
     #env.monitor.start('/tmp/{}-run'.format(env_name), force=True)
 
     agent = network(env.observation_space, env.action_space, hidden_nodes)
-    
+    # I think this is right?
+    agent.y = tf.matmul(env.reset(), agent.weights['out']) + agent.biases['out']
+    Q = tf.reduce_sum(agent.y, agent.y_, reduction_indices=1)
+    # past here I'm not really sure what I'm doing    
+
     runs = 1501
     sequences = 249
     score = deque(maxlen=100)
@@ -132,10 +160,10 @@ if __name__ == '__main__':
         best_reward = reward = 0
         done = False
 
-        for frame in range(frames):
+        for sequence in range(sequences):
             action = agent.get_action(obs)
             mem = env.step(action)
-            agent.add_mem(mem)
+            agent.add_mem(mem, obs, action)
 
             new_obs, reward, _, _ = mem
             obs = new_obs
@@ -146,6 +174,5 @@ if __name__ == '__main__':
         score.append(best_reward)
         print(average(score))
 
-    agent.save_weights()
     #env.monitor.close()
-        
+    sess.close() 

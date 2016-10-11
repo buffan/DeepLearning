@@ -7,6 +7,8 @@ from random import random, sample
 
 MIN_EPSILON = 0.05
 MAX_REPLAYS = 100
+BATCH_SIZE = 50
+UPDATE = 200
 
 
 class network(object):
@@ -22,32 +24,32 @@ class network(object):
         self.replay_memory = deque(maxlen=MAX_REPLAYS)
         self.epsilon = 1.0
         self.epsilon_decay = 0.999
-        self.gamme = 0.99
+        self.gamma = 0.99
         self.num_steps = 0  
         self.input_width = obs_space.shape[0]
         self.output_width = act_space.n
         self.hidden_nodes = hidden_nodes
 
         self.weights = self.initialize_weights()
+        self.weights_ = self.initialize_weights()
         self.biases = self.initialize_biases()
+        self.biases_ = self.initialize_biases()
 
         self.x = tf.placeholder(tf.float32, [None, self.input_width])
-        self.y_ = self.y = tf.placeholder(tf.float32, [None, self.output_width])
+        self.Q_ = self.Q = tf.placeholder(tf.float32, [None, self.output_width])
 
-        self.session = tf.InteractiveSession()
-        self.session.run(tf.initialize_all_variables())
-
-        
-    def build_network(self): 
+ 
+    def build_network(self, weights, biases): 
         """
         Constructs the network from the initialized dictionaries of weights & biases
 
         Returns: Final layer of the neural network
         """
-        hidden1 = tf.nn.sigmoid(tf.matmul(self.x, self.weights['w1']) + self.biases['b1'])
-        hidden2 = tf.nn.sigmoid(tf.matmul(hidden1, self.weights['w2']) + self.biases['b2'])
-        hidden3 = tf.nn.sigmoid(tf.matmul(hidden2, self.weights['w3']) + self.biases['b3'])
-        out = tf.nn.sigmoid(tf.matmul(hidden3, self.weights['out']) + self.biases['out'])
+        print(self.x)
+        hidden1 = tf.nn.relu(tf.matmul(self.x, weights['w1']) + biases['b1'])
+        hidden2 = tf.nn.relu(tf.matmul(hidden1, weights['w2']) + biases['b2'])
+        hidden3 = tf.nn.relu(tf.matmul(hidden2, weights['w3']) + biases['b3'])
+        out = tf.nn.linear(tf.matmul(hidden3, weights['out']) + biases['out'])
 
         return out
 
@@ -81,18 +83,32 @@ class network(object):
             'out': tf.Variable(tf.random_normal([self.output_width]))
         }
 
+
+    def update_weights_and_biases(self):
+        """
+        Copies the weights and biases from Q_ to the Q network
+        """
+        for w_key, b_key in zip(self.weights.keys(), self.biases.keys()):
+            self.weights[w_key] = self.weights_[w_key]
+            self.biases[b_key] = self.biases_[b_key]
         
-    def get_action(self, obs):
+
+    def get_action(self, obs, session):
         """
         Returns the action the network should take
         Inputs: 
             obs- observation of environment (environment inputs)
         """
-        self.epsilon *= self.epsilon_decay
-
         self.epsilon = max(self.epsilon, MIN_EPSILON)
-        action = (self.act_space.sample() if self.epsilon > random()
-            else tf.argmax(self.session.run(self.y, np.array([obs]))))
+
+        action = None
+        if self.epsilon > random():
+            action = self.act_space.sample()
+        else:
+            action_list = session.run(self.Q, feed_dict={inputStates:np.array([obs])})
+            action = tf.argmax(action_list)
+
+        self.epsilon *= self.epsilon_decay
 
         return action
 
@@ -111,32 +127,13 @@ class network(object):
         self.num_steps += 1
 
 
-    def train(self):
-        """
-        Trains the neural network
-        """
-        # This network is a mess and I don't know what's going o
-        current_batch_size = min(len(self.replay_memory), BATCH_SIZE)
-        sample_batch = sample(self.replay_memory, current_batch_size)
-        
-        x = np.zeros((current_batch_size, self.input_width))
-        y = np.zeros((current_batch_size, self.output_width))
-        
-        loss = 0
-        for replay in range(current_batch_size):
-            prev_state, curr_state, action, reward, done = sample_batch[replay]
-            update = np.copy(self.model.predict(prev_state.reshape(1, self.input_width))[0])
-
-        if done:
-            update[action] = reward
-        else:
-            available_actions = self.model.predict(curr_state.reshape(1, self.input_width))[0]
-            update[action] = reward + self.gamme*tf.argmax(available_actions)
-        
-        x[replay] = prev_state
-        y[replay] = update
-
-        loss += self.model.train_on_batch(x, y)
+def start_session():
+    """
+    Starts the tensorflow session and initializes the variables
+    """
+    session = tf.InteractiveSession()
+    session.run(tf.initialize_all_variables())
+    return session
 
 
 if __name__ == '__main__':
@@ -145,14 +142,25 @@ if __name__ == '__main__':
     env = gym.make(env_name)
     #env.monitor.start('/tmp/{}-run'.format(env_name), force=True)
 
+    # Generate Q and Q_ networks
     agent = network(env.observation_space, env.action_space, hidden_nodes)
-    # I think this is right?
-    agent.y = tf.matmul(env.reset(), agent.weights['out']) + agent.biases['out']
-    Q = tf.reduce_sum(agent.y, agent.y_, reduction_indices=1)
-    # past here I'm not really sure what I'm doing    
+    agent.Q = agent.build_network(agent.weights, agent.biases)
+    agent.Q_ = agent.build_network(agent.weights_, agent.biases_)
 
+    # Training setup
+    action_placeholder = tf.placeholder(tf.int32, [None])
+    action_mask = tf.one_hot(action_placeholder, agent.output_width)
+    QValue = tf.reduce_sum(tf.mul(agent.Q, action_mask), reduction_indices=1)
+    Q_Value = tf.placeholder(tf.float32, [None,])
+
+    loss = tf.reduce_mean(tf.square(QValue - Q_Value))
+    training = tf.train.AdamOptimizer(0.0001).minimize(loss)
+    
+    sess = start_session()
+       
+    # Run and train network
     runs = 1501
-    sequences = 249
+    sequences = 250
     score = deque(maxlen=100)
 
     for run in range(runs):
@@ -165,14 +173,50 @@ if __name__ == '__main__':
             mem = env.step(action)
             agent.add_mem(mem, obs, action)
 
-            new_obs, reward, _, _ = mem
+            new_obs, reward, done, _ = mem
             obs = new_obs
             best_reward += reward
+            
+            # Create batch
+            batch_size = min(len(agent.relay_memory), BATCH_SIZE)
+            num_memories = len(agent.replay_memory)
+            mem_indexes = np.random.choice(batch_size, batch, replace=True)
+            memories_batch = []
+            for index in mem_indexes:
+                memories_batch.append(replay_memory[mem_index])
+ 
+            # Test batch
+            mem_next_observations, mem_observations, mem_rewards, mem_dones, mem_actions = zip(*memories_batch)
+            next_Q_ = sess.run(agent.Q_, feed_dict={inputStates: mem_next_obs})
 
-            agent.train()
+            y_ = []
 
-        score.append(best_reward)
-        print(average(score))
+            for index, _ in enumerate(mem_observations):
+                if mem_dones[index]:
+                    y_.append(mem_actions[index])
+                else:
+                    curr_Q_ = next_Q_[index]
+                    maxQ = max(curr_Q_)
+                    y_.append(mem_rewards[index] + gamma*maxQ)
+            
+            feed = { inputStates: mem_observations,
+                     Q_Value: y_,
+                     action_placeholder: mem_actions
+                   }
+            sess.run([training], feed_dict=feed)
+            training_step = run*sequences + sequence
+            if training_step % UPDATE == 0:
+                sess.run(agent.update_weights_and_biases)
+            
+            obs = new_obs
+            if done:
+                if sequence % 20 == 0:
+                    print("Run: {}, Sequence: {}".format(run, sequence))
+                break
+
+
+#        score.append(best_reward)
+#        print(average(score))
 
     #env.monitor.close()
     sess.close() 

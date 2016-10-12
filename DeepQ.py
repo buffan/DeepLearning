@@ -9,6 +9,7 @@ MIN_EPSILON = 0.05
 MAX_REPLAYS = 100
 BATCH_SIZE = 50
 UPDATE = 200
+DROPOUT_RATE = 0.5
 
 
 class network(object):
@@ -45,11 +46,12 @@ class network(object):
 
         Returns: Final layer of the neural network
         """
-        print(self.x)
         hidden1 = tf.nn.relu(tf.matmul(self.x, weights['w1']) + biases['b1'])
         hidden2 = tf.nn.relu(tf.matmul(hidden1, weights['w2']) + biases['b2'])
         hidden3 = tf.nn.relu(tf.matmul(hidden2, weights['w3']) + biases['b3'])
-        out = tf.nn.linear(tf.matmul(hidden3, weights['out']) + biases['out'])
+        # add dropout
+        hidden3 = tf.nn.dropout(hidden3, DROPOUT_RATE)
+        out = tf.matmul(hidden3, weights['out']) + biases['out']
 
         return out
 
@@ -77,7 +79,7 @@ class network(object):
         Returns: dictionary containing initialized biases of all layers
         """
         return {
-            'b1': tf.Variable(tf.random_normal([self.input_width])),
+            'b1': tf.Variable(tf.random_normal([self.hidden_nodes])),
             'b2': tf.Variable(tf.random_normal([self.hidden_nodes])),
             'b3': tf.Variable(tf.random_normal([self.hidden_nodes])),
             'out': tf.Variable(tf.random_normal([self.output_width]))
@@ -89,8 +91,8 @@ class network(object):
         Copies the weights and biases from Q_ to the Q network
         """
         for w_key, b_key in zip(self.weights.keys(), self.biases.keys()):
-            self.weights[w_key] = self.weights_[w_key]
-            self.biases[b_key] = self.biases_[b_key]
+            self.weights[w_key].assign(self.weights_[w_key])
+            self.biases[b_key].assign(self.biases_[b_key])
         
 
     def get_action(self, obs, session):
@@ -148,8 +150,8 @@ if __name__ == '__main__':
     agent.Q_ = agent.build_network(agent.weights_, agent.biases_)
 
     # Training setup
-    action_placeholder = tf.placeholder(tf.int32, [None])
-    action_mask = tf.one_hot(action_placeholder, agent.output_width)
+    action_placeholder = tf.placeholder(tf.int32, [None], name="action_masks")
+    action_mask = tf.one_hot(action_placeholder, agent.output_width, on_value=1, off_value=0)
     QValue = tf.reduce_sum(tf.mul(agent.Q, action_mask), reduction_indices=1)
     Q_Value = tf.placeholder(tf.float32, [None,])
 
@@ -204,6 +206,7 @@ if __name__ == '__main__':
                      action_placeholder: mem_actions
                    }
             sess.run([training], feed_dict=feed)
+
             training_step = run*sequences + sequence
             if training_step % UPDATE == 0:
                 sess.run(agent.update_weights_and_biases)

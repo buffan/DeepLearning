@@ -150,8 +150,9 @@ if __name__ == '__main__':
     agent.Q_ = agent.build_network(agent.weights_, agent.biases_)
 
     # Training setup
-    action_placeholder = tf.placeholder(tf.int32, [None], name="action_masks")
-    action_mask = tf.one_hot(action_placeholder, agent.output_width, on_value=1, off_value=0)
+    # Look for workaround of one_hot
+    action_placeholder = tf.placeholder(tf.int64, [None], name="action_masks")
+    action_mask = tf.one_hot(action_placeholder, env.action_space.n)
     QValue = tf.reduce_sum(tf.mul(agent.Q, action_mask), reduction_indices=1)
     Q_Value = tf.placeholder(tf.float32, [None,])
 
@@ -188,14 +189,14 @@ if __name__ == '__main__':
                 memories_batch.append(replay_memory[mem_index])
  
             # Test batch
-            mem_next_observations, mem_observations, mem_rewards, mem_dones, mem_actions = zip(*memories_batch)
+            mem_next_observations, mem_observations, mem_actions, mem_rewards, mem_dones = zip(*memories_batch)
             next_Q_ = sess.run(agent.Q_, feed_dict={inputStates: mem_next_obs})
 
             y_ = []
 
             for index, _ in enumerate(mem_observations):
                 if mem_dones[index]:
-                    y_.append(mem_actions[index])
+                    y_.append(mem_rewards[index])
                 else:
                     curr_Q_ = next_Q_[index]
                     maxQ = max(curr_Q_)

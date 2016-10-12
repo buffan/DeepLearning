@@ -1,5 +1,6 @@
 import gym
 import tensorflow as tf
+import numpy as np
 from collections import deque
 from random import random, sample
 
@@ -10,6 +11,7 @@ MAX_REPLAYS = 100
 BATCH_SIZE = 50
 UPDATE = 200
 DROPOUT_RATE = 0.5
+GAMMA = 0.99
 
 
 class network(object):
@@ -25,7 +27,6 @@ class network(object):
         self.replay_memory = deque(maxlen=MAX_REPLAYS)
         self.epsilon = 1.0
         self.epsilon_decay = 0.999
-        self.gamma = 0.99
         self.num_steps = 0  
         self.input_width = obs_space.shape[0]
         self.output_width = act_space.n
@@ -90,10 +91,12 @@ class network(object):
         """
         Copies the weights and biases from Q_ to the Q network
         """
+        functions = []
         for w_key, b_key in zip(self.weights.keys(), self.biases.keys()):
-            self.weights[w_key].assign(self.weights_[w_key])
-            self.biases[b_key].assign(self.biases_[b_key])
+            functions.append(self.weights[w_key].assign(self.weights_[w_key]))
+            functions.append(self.biases[b_key].assign(self.biases_[b_key]))
         
+        return functions
 
     def get_action(self, obs, session):
         """
@@ -107,8 +110,8 @@ class network(object):
         if self.epsilon > random():
             action = self.act_space.sample()
         else:
-            action_list = session.run(self.Q, feed_dict={inputStates:np.array([obs])})
-            action = tf.argmax(action_list)
+            action_list = session.run(self.Q, feed_dict={self.x: np.array([obs])})[0]
+            action = np.argmax(action_list)
 
         self.epsilon *= self.epsilon_decay
 
@@ -151,13 +154,15 @@ if __name__ == '__main__':
 
     # Training setup
     # Look for workaround of one_hot
-    action_placeholder = tf.placeholder(tf.int64, [None], name="action_masks")
-    action_mask = tf.one_hot(action_placeholder, env.action_space.n)
+    action_placeholder = tf.placeholder(tf.int32, [None], name="action_masks")
+    action_mask = np.zeros([agent.output_width])
+    #action_mask = tf.one_hot(action_placeholder, agent.output_width)
     QValue = tf.reduce_sum(tf.mul(agent.Q, action_mask), reduction_indices=1)
     Q_Value = tf.placeholder(tf.float32, [None,])
 
     loss = tf.reduce_mean(tf.square(QValue - Q_Value))
     training = tf.train.AdamOptimizer(0.0001).minimize(loss)
+    update_functions = agent.update_weights_and_biases()
     
     sess = start_session()
        
@@ -172,8 +177,9 @@ if __name__ == '__main__':
         done = False
 
         for sequence in range(sequences):
-            action = agent.get_action(obs)
+            action = agent.get_action(obs, sess)
             mem = env.step(action)
+            env.render()
             agent.add_mem(mem, obs, action)
 
             new_obs, reward, done, _ = mem
@@ -181,16 +187,16 @@ if __name__ == '__main__':
             best_reward += reward
             
             # Create batch
-            batch_size = min(len(agent.relay_memory), BATCH_SIZE)
+            batch_size = min(len(agent.replay_memory), BATCH_SIZE)
             num_memories = len(agent.replay_memory)
-            mem_indexes = np.random.choice(batch_size, batch, replace=True)
+            mem_indexes = np.random.choice(batch_size, num_memories, replace=True)
             memories_batch = []
             for index in mem_indexes:
-                memories_batch.append(replay_memory[mem_index])
+                memories_batch.append(agent.replay_memory[index])
  
             # Test batch
             mem_next_observations, mem_observations, mem_actions, mem_rewards, mem_dones = zip(*memories_batch)
-            next_Q_ = sess.run(agent.Q_, feed_dict={inputStates: mem_next_obs})
+            next_Q_ = sess.run(agent.Q_, feed_dict={agent.x: mem_next_observations})
 
             y_ = []
 
@@ -200,9 +206,9 @@ if __name__ == '__main__':
                 else:
                     curr_Q_ = next_Q_[index]
                     maxQ = max(curr_Q_)
-                    y_.append(mem_rewards[index] + gamma*maxQ)
+                    y_.append(mem_rewards[index] + GAMMA*maxQ)
             
-            feed = { inputStates: mem_observations,
+            feed = { agent.x: mem_observations,
                      Q_Value: y_,
                      action_placeholder: mem_actions
                    }
@@ -210,13 +216,13 @@ if __name__ == '__main__':
 
             training_step = run*sequences + sequence
             if training_step % UPDATE == 0:
-                sess.run(agent.update_weights_and_biases)
+                sess.run(update_functions)
             
             obs = new_obs
             if done:
-                if sequence % 20 == 0:
-                    print("Run: {}, Sequence: {}".format(run, sequence))
                 break
+        if run % 30 == 0:
+            print("Run: {}, Score: {}".format(run, best_reward))
 
 
 #        score.append(best_reward)

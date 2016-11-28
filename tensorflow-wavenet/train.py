@@ -20,7 +20,8 @@ from tensorflow.python.client import timeline
 from wavenet import WaveNetModel, AudioReader, optimizer_factory
 
 BATCH_SIZE = 1
-DATA_DIRECTORY = './VCTK-Corpus'
+DATA_DIRECTORY = '../Music/Mixed'
+SPLIT_DIRECTORY = '../Music/Guitar'
 LOGDIR_ROOT = './logdir'
 CHECKPOINT_EVERY = 50
 NUM_STEPS = int(1e5)
@@ -47,7 +48,9 @@ def get_arguments():
     parser.add_argument('--batch_size', type=int, default=BATCH_SIZE,
                         help='How many wav files to process at once.')
     parser.add_argument('--data_dir', type=str, default=DATA_DIRECTORY,
-                        help='The directory containing the VCTK corpus.')
+                        help='The directory containing the mixed sources.')
+    parser.add_argument('--answer_dir', type=str, default=SPLIT_DIRECTORY,
+                        help='The directory containing the split source.')
     parser.add_argument('--store_metadata', type=bool, default=False,
                         help='Whether to store advanced debugging information '
                         '(execution time, memory consumption) for use with '
@@ -214,7 +217,18 @@ def main():
             sample_rate=wavenet_params['sample_rate'],
             sample_size=args.sample_size,
             silence_threshold=args.silence_threshold)
+        print('Reader created')
+
+        output_reader = AudioReader(
+            args.answer_dir,
+            coord,
+            sample_rate=wavenet_params['sample_rate'],
+            sample_size=args.sample_size,
+            silence_threshold=args.silence_threshold)
+        print('Output reader created')
+
         audio_batch = reader.dequeue(args.batch_size)
+        output_batch = output_reader.dequeue(args.batch_size)
 
     # Create network.
     net = WaveNetModel(
@@ -229,9 +243,10 @@ def main():
         scalar_input=wavenet_params["scalar_input"],
         initial_filter_width=wavenet_params["initial_filter_width"],
         histograms=args.histograms)
+    print('Network created')
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
-    loss = net.loss(audio_batch, args.l2_regularization_strength)
+    loss = net.loss(audio_batch, output_batch, args.l2_regularization_strength)
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
                     momentum=args.momentum)
@@ -251,7 +266,7 @@ def main():
 
     # Saver for storing checkpoints of the model.
     saver = tf.train.Saver(var_list=tf.trainable_variables())
-
+    print('Saver created')
     try:
         saved_global_step = load(saver, sess, restore_from)
         if is_overwritten_training or saved_global_step is None:
@@ -267,6 +282,8 @@ def main():
 
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     reader.start_threads(sess)
+    output_reader.start_threads(sess)
+    print('Threads started')
 
     step = None
     try:
@@ -296,6 +313,10 @@ def main():
             duration = time.time() - start_time
             print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'
                   .format(step, loss_value, duration))
+
+            with open(os.path.join(logdir, 'loss.txt'), 'a') as f:
+                f.write('{:d} {:.3f} {:.3f}\n'
+                    .format(step, loss_value, duration))
 
             if step % args.checkpoint_every == 0:
                 save(saver, sess, logdir, step)

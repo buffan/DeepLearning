@@ -469,6 +469,7 @@ class WaveNetModel(object):
 
     def loss(self,
              input_batch,
+             correct_batch,
              l2_regularization_strength=None,
              name='wavenet'):
         '''Creates a WaveNet network and returns the autoencoding loss.
@@ -479,8 +480,12 @@ class WaveNetModel(object):
             # We mu-law encode and quantize the input audioform.
             input_batch = mu_law_encode(input_batch,
                                         self.quantization_channels)
+            correct_batch = mu_law_encode(correct_batch,
+                                        self.quantization_channels)
 
             encoded = self._one_hot(input_batch)
+            correct_encoded = self._one_hot(correct_batch)
+
             if self.scalar_input:
                 network_input = tf.reshape(
                     tf.cast(input_batch, tf.float32),
@@ -488,20 +493,27 @@ class WaveNetModel(object):
             else:
                 network_input = encoded
 
+            if self.scalar_input:
+                correct_network_output = tf.reshape(
+                    tf.cast(correct_batch, tf.float32),
+                    [self.batch_size, -1, 1])
+            else:
+                correct_network_output = correct_encoded
+
             raw_output = self._create_network(network_input)
 
             with tf.name_scope('loss'):
                 # Shift original input left by one sample, which means that
                 # each output sample has to predict the next input sample.
-                shifted = tf.slice(encoded, [0, 1, 0],
-                                   [-1, tf.shape(encoded)[1] - 1, -1])
-                shifted = tf.pad(shifted, [[0, 0], [0, 1], [0, 0]])
-
+#                shifted = tf.slice(encoded, [0, 1, 0],
+#                                   [-1, tf.shape(encoded)[1] - 1, -1])
+#                shifted = tf.pad(shifted, [[0, 0], [0, 1], [0, 0]])
+#
                 prediction = tf.reshape(raw_output,
                                         [-1, self.quantization_channels])
                 loss = tf.nn.softmax_cross_entropy_with_logits(
                     prediction,
-                    tf.reshape(shifted, [-1, self.quantization_channels]))
+                    tf.reshape(correct_network_output, [-1, self.quantization_channels]))
                 reduced_loss = tf.reduce_mean(loss)
 
                 tf.scalar_summary('loss', reduced_loss)

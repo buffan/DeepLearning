@@ -88,10 +88,10 @@ def get_arguments():
     return parser.parse_args()
 
 
-def write_wav(waveform, sample_rate, filename):
+def write_wav(waveform, sample_rate, filename, step):
     y = np.array(waveform)
     librosa.output.write_wav(filename, y, sample_rate)
-    print('Updated wav file at {}'.format(filename))
+    print('Updated wav file at {}. Step: {}'.format(filename, step))
 
 
 def create_seed(filename,
@@ -221,7 +221,7 @@ def main():
         if (args.wav_out_path and args.save_every and
                 (step + 1) % args.save_every == 0):
             out = sess.run(decode, feed_dict={samples: waveform})
-            write_wav(out, wavenet_params['sample_rate'], args.wav_out_path)
+            write_wav(out, wavenet_params['sample_rate'], args.wav_out_path, step+1)
 
     # Introduce a newline to clear the carriage return from the progress.
     print()
@@ -238,7 +238,7 @@ def main():
     # Save the result as a wav file.
     if args.wav_out_path:
         out = sess.run(decode, feed_dict={samples: waveform})
-        write_wav(out, wavenet_params['sample_rate'], args.wav_out_path)
+        write_wav(out, wavenet_params['sample_rate'], args.wav_out_path, args.samples)
 
     print('Finished generating. The result can be viewed in TensorBoard.')
 
